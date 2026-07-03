@@ -1,0 +1,12 @@
+python-dotenv
+pydantic
+langchain
+langchain-chroma
+chromadb
+FlagEmbedding
+langchain-mcp-adapters
+mcp
+langchain-openai
+openai
+httpx
+streamlit

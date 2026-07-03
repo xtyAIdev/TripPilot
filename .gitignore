@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets and machine-specific config
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Local vector stores and generated data
+data/chroma_db/
+data/chroma_db_test/
+data/processed/
+
+# Generated artifacts
+outputs/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
