@@ -114,9 +114,12 @@ OFFICIAL_REPORT_PROMPT = """
 目标：输出可执行的 Markdown 行程报告。
 要求：
 - 开头先用 1 到 2 句话说明结论和整体策略。
+- 必须严格使用 TripRequest 中的人数、出发地、目的地、天数和交通方式；不要把示例、默认值或“同伴”写进报告。
 - 明确区分 RAG、MCP、预算工具、估算信息。
-- 必须包含：需求摘要表、天气提醒、每日安排表、交通建议、预算拆分表、风险与待确认事项、质检结论、下一步建议。
+- 必须包含：需求摘要表、天气提醒、每日安排表、交通建议、预算拆分表、风险与待确认事项、下一步建议。
+- 本生成阶段不要输出“质检结论”章节；Reflection Agent 会在最终阶段统一追加，避免重复。
 - 如果预算或时间不可行，先说明风险，再给替代方案。
+- 没有工具证据时，禁止编造具体车次、酒店名称、精确票价、营业时间、预约余量；只能写“建议到 12306/官方平台确认”或“以实时查询为准”。
 - 不要使用 emoji 或特殊装饰符号。
 """
 
@@ -965,14 +968,14 @@ class TripPilotConversationAgent:
 
             if not feedback.get("need_refine"):
                 self._debug("Action: Finish[Reflection 判断无需继续优化]", debug)
-                return current + "\n\n## 质检结论\n\n" + feedback.get("reason", "无需继续优化。")
+                return _append_quality_conclusion(current, feedback.get("reason", "无需继续优化。"))
 
             self._debug("Thought: Reflection 发现重要问题，需要根据反馈优化行程。", debug)
             self._debug("Action: refine_trip_plan(feedback=Reflection反馈)", debug)
             current = self._refine_plan(request, current, observations, feedback)
 
         self._debug("Action: Finish[达到最大 Reflection 迭代次数]", debug)
-        return current + "\n\n## 质检结论\n\n已达到最大反思迭代次数，建议人工确认剩余实时信息。"
+        return _append_quality_conclusion(current, "已达到最大反思迭代次数，建议人工确认剩余实时信息。")
 
     def _refine_plan(
         self,
@@ -1072,6 +1075,17 @@ def _parse_json_dict(text: str) -> Dict:
         "issues": [],
         "suggestions": [],
     }
+
+
+def _append_quality_conclusion(plan_text: str, conclusion: str) -> str:
+    """统一追加最终质检结论，避免生成阶段和 Reflection 阶段重复输出。"""
+    cleaned = re.sub(r"\n## 质检结论\s*\n[\s\S]*?(?=\n## |\Z)", "\n", plan_text).strip()
+    cleaned = re.sub(
+        r"\n\*\*质检结论\*\*\s*\n[\s\S]*?(?=\n\*\*下一步建议\*\*|\n## 下一步建议|\Z)",
+        "\n",
+        cleaned,
+    ).strip()
+    return f"{cleaned}\n\n## 质检结论\n\n{conclusion}"
 
 
 def _default_plan() -> List[Dict]:

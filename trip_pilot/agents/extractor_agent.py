@@ -58,6 +58,7 @@ CONTEXTUAL_UPDATE_PROMPT = """
 - 不确定时不要编造，保留已有字段。
 
 请只输出合并后的 TripRequest JSON，不要解释。
+严禁因为示例词覆盖当前状态；例如用户说“三天”时，只能改 days，不能把 people 改成示例中的 2。
 """
 
 INTENT_SYSTEM_PROMPT = """
@@ -130,6 +131,7 @@ def extract_trip_request(user_input: str, current_request: TripRequest | None = 
     except Exception:
         extracted = _heuristic_trip_request(user_input)
     if current_request:
+        extracted = _guard_contextual_update(user_input, current_request, extracted)
         return current_request.merge(extracted)
     return extracted
 
@@ -166,9 +168,48 @@ def resolve_contextual_trip_update(
         )
         data = _parse_json(response.content)
         extracted = TripRequest.model_validate(data)
+        extracted = _guard_contextual_update(user_input, current_request, extracted)
     except Exception:
         extracted = _heuristic_trip_request(user_input)
     return current_request.merge(extracted)
+
+
+def _guard_contextual_update(
+    user_input: str,
+    current_request: TripRequest,
+    extracted: TripRequest,
+) -> TripRequest:
+    """短回答补槽时只允许更新用户本轮明确提到的字段，防止 LLM 被示例污染。"""
+    text = user_input.strip()
+    if len(text) > 18:
+        return extracted
+
+    allowed = set()
+    if re.search(r"[一二两三四五六七八九十\d]+\s*(天|日)", text):
+        allowed.add("days")
+    if re.search(r"[一二两三四五六七八九十\d]+\s*(个人|人)", text):
+        allowed.add("people")
+    if any(keyword in text for keyword in ["包含", "包括", "含", "不包含", "不含", "当地", "往返"]):
+        allowed.add("budget_scope")
+    if any(keyword in text for keyword in ["高铁", "火车", "飞机", "自驾", "大巴"]):
+        allowed.add("travel_mode")
+    if any(keyword in text for keyword in ["本周末", "周末", "明天", "后天", "下周"]) or re.search(r"\d{4}-\d{1,2}-\d{1,2}", text):
+        allowed.add("start_date")
+    if "出发" in text:
+        allowed.add("origin")
+    if any(keyword in text for keyword in ["预算", "元", "块"]):
+        allowed.add("budget")
+
+    if not allowed:
+        return _heuristic_trip_request(user_input)
+
+    base = current_request.model_dump()
+    new_data = extracted.model_dump()
+    for field in allowed:
+        value = new_data.get(field)
+        if value not in (None, "", []):
+            base[field] = value
+    return TripRequest.model_validate(base)
 
 
 def _parse_json(text: str) -> dict:
@@ -208,7 +249,7 @@ def _heuristic_trip_request(user_input: str) -> TripRequest:
     text = user_input.strip()
     data = {}
 
-    origin_match = re.search(r"从([^，。,\s]+)出发", text)
+    origin_match = re.search(r"(?:从)?([^，。,\s]+)出发", text)
     if origin_match:
         data["origin"] = origin_match.group(1)
 
@@ -220,7 +261,7 @@ def _heuristic_trip_request(user_input: str) -> TripRequest:
     if days:
         data["days"] = days
 
-    people = _extract_number_before_keywords(text, ["人", "个人"])
+    people = _extract_number_before_keywords(text, ["个人", "人"])
     if people:
         data["people"] = people
 
