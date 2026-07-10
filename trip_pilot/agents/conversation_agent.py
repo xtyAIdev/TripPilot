@@ -73,13 +73,20 @@ PLANNER_PROMPT = """
 
 输出 JSON 数组：
 [
-  {"step": 1, "name": "步骤名", "tool": "tool名称", "reason": "为什么需要"}
+  {
+    "step": 1,
+    "name": "步骤名",
+    "tool": "tool名称",
+    "reason": "为什么需要",
+    "params": {"poi_keywords": ["可选"], "route_points": ["可选"], "budget_focus": "可选"}
+  }
 ]
 
 规则：
 - 只使用上面列出的 tool。
 - 数组里的每一项必须是对象，不能输出字符串步骤。
 - 每个对象必须包含 step、name、tool、reason 四个字段。
+- params 可省略；如果用户有明确偏好，请把 POI 关键词、路线点或预算关注点写进 params，方便 Executor 真正按计划执行。
 - 草案模式可少用工具，正式报告应优先使用 weather/poi/hotel/budget。
 - 用户关心路线顺序或少走路时，加入 geocode 和 distance。
 - 用户提到预算拆分或算账时，加入 calculate。
@@ -180,7 +187,7 @@ class TripPilotConversationAgent:
         self.memory.reply_mode = self.current_reply_mode
         self.memory.phase = "collecting"
 
-        self._progress("正在解析出行需求")
+        self._progress("正在解析出行需求", stage="parse")
         intent = classify_intent(user_input, self.memory.history_summary())
         self._debug(f"[Intent] {intent.intent} | confidence={intent.confidence} | {intent.reason}", debug)
         contextual_updated = self._resolve_contextual_update(user_input, debug=debug)
@@ -305,7 +312,8 @@ class TripPilotConversationAgent:
             return "detailed"
         return "standard"
 
-    def _progress(self, message: str) -> None:
+    def _progress(self, message: str, stage: str = "run", detail: str = "") -> None:
+        self.memory.remember_step(stage=stage, title=message, detail=detail)
         if self.progress_callback:
             self.progress_callback(message)
 
@@ -314,7 +322,7 @@ class TripPilotConversationAgent:
         if not self._looks_like_trip_context():
             return False
         before = self.memory.trip_request.model_dump_json(ensure_ascii=False)
-        self._progress("正在结合上下文理解补充信息")
+        self._progress("正在结合上下文理解补充信息", stage="memory")
         updated = resolve_contextual_trip_update(
             user_input=user_input,
             current_request=self.memory.trip_request,
@@ -514,21 +522,43 @@ class TripPilotConversationAgent:
 
     def _ask_for_missing_fields(self, missing: List[str], formal: bool = False) -> str:
         fields = "、".join(missing)
+        self.memory.open_questions = [
+            self._open_question_for_label(label)
+            for label in missing
+        ]
         if formal:
             return (
-                f"正式生成行程前，我还需要确认：{fields}。\n"
+                f"可以继续，但正式生成前还差：{fields}。\n\n"
                 "这些信息会影响天气、酒店价格、往返交通和预算判断。"
-                "请补充后我再进入规划流程。"
+                "你直接用一句话补充即可，例如“下周五出发，高铁，预算包含往返交通”。"
             )
         return (
-            f"我还缺少必要信息：{fields}。\n"
-            "请补充这些信息后，我再继续规划。你也可以同时补充预算、出发日期、交通方式和偏好。"
+            f"我已经先记下这次旅行意图了，还差：{fields}。\n\n"
+            "你可以继续补一句，比如“三天，两个人，预算 1500，想轻松一点”。"
+        )
+
+    def _open_question_for_label(self, label: str):
+        from trip_pilot.schemas import OpenQuestion
+
+        question_map = {
+            "始发地": "你从哪个城市出发？",
+            "目的地城市": "这次想去哪个城市？",
+            "出发日期": "大概什么时候出发？可以说本周末、下周六或具体日期。",
+            "旅行天数": "计划玩几天？",
+            "出行人数": "一共几个人出行？",
+            "往返交通方式": "往返大交通偏好高铁、飞机、自驾还是暂不确定？",
+            "预算是否包含往返大交通": "预算是否包含往返大交通？",
+        }
+        return OpenQuestion(
+            field=label,
+            question=question_map.get(label, f"请确认{label}。"),
+            reason="补齐后行程、预算和工具查询会更准确。",
         )
 
     def _run_plan_solve_react_reflection(self, debug: bool = True) -> str:
         request = self.memory.trip_request
 
-        self._progress("正在制定执行计划")
+        self._progress("正在制定执行计划", stage="plan")
         self._debug("\n=== Plan-and-Solve | 规划阶段 ===", debug)
         plan = self._make_plan(request)
         for item in plan:
@@ -541,14 +571,14 @@ class TripPilotConversationAgent:
         self._debug("\n=== ReAct | 执行阶段 ===", debug)
         observations = self._execute_react_steps(request, plan, debug=debug)
 
-        self._progress("正在检查约束条件")
+        self._progress("正在检查约束条件", stage="check")
         constraint_check = validate_constraints(request)
         self.memory.open_questions = constraint_check.open_questions
         observations["constraint_check"] = format_constraint_check(constraint_check)
         self._debug("\n=== Constraint Check | 约束校验 ===", debug)
         self._debug(observations["constraint_check"], debug)
 
-        self._progress("正在生成行程方案")
+        self._progress("正在生成行程方案", stage="solve")
         self._debug("\n=== Solve | 生成初稿 ===", debug)
         draft = self._generate_draft(request, plan, observations)
         self._debug(draft[:1200], debug)
@@ -557,7 +587,7 @@ class TripPilotConversationAgent:
             self._debug("\n=== Draft Mode | 草案模式跳过 Reflection ===", debug)
             return draft + "\n\n## 草案说明\n\n这是初步草案，未进入 Reflection 正式质检。补充日期、交通方式、预算范围后可生成正式行程。"
 
-        self._progress("正在进行行程质检")
+        self._progress("正在进行行程质检", stage="reflect")
         self._debug("\n=== Reflection | 反思优化阶段 ===", debug)
         final_plan = self._reflect_and_refine(request, draft, observations, debug=debug)
         return final_plan
@@ -590,20 +620,21 @@ class TripPilotConversationAgent:
         days = request.days or 1
         people = request.people or 1
         tools = self._tools_from_plan(plan)
+        plan_hints = self._collect_plan_hints(plan)
         if not tools:
             tools = {"time", "rag", "weather", "poi", "hotel", "budget"}
 
         query = f"{destination} {' '.join(request.preferences)} {' '.join(request.constraints)}"
 
         if "time" in tools:
-            self._progress("正在解析出行时间")
+            self._progress("正在解析出行时间", stage="time")
             self._debug("Thought: 用户可能使用相对日期，需要注入当前运行时间。", debug)
             self._debug("Action: get_current_time()", debug)
             observations["time"] = self._cached_tool_invoke("time", {}, lambda: get_current_time.invoke({}))
             self._debug(f"Observation: {observations['time']}", debug)
 
         if "rag" in tools:
-            self._progress("正在检索目的地知识")
+            self._progress("正在检索目的地知识", stage="rag")
             self._debug("Thought: 需要检索本地知识库，获得稳定的城市旅行背景。", debug)
             self._debug(f'Action: search_travel_docs(query="{query}")', debug)
             observations["rag"] = self._cached_tool_invoke(
@@ -614,7 +645,7 @@ class TripPilotConversationAgent:
             self._debug(f"Observation: {observations['rag'][:1000]}", debug)
 
         if "weather" in tools:
-            self._progress("正在查询天气信息")
+            self._progress("正在查询天气信息", stage="weather")
             self._debug("Thought: 天气会影响户外景点和行程强度，需要查询高德天气。", debug)
             self._debug(f'Action: get_weather_via_gaode(city="{destination}")', debug)
             observations["weather"] = self._cached_tool_invoke(
@@ -625,8 +656,8 @@ class TripPilotConversationAgent:
             self._debug(f"Observation: {observations['weather'][:1000]}", debug)
 
         if "poi" in tools:
-            self._progress("正在查询景点与周边点位")
-            poi_keywords = self._select_poi_keywords(request)
+            self._progress("正在查询景点与周边点位", stage="poi")
+            poi_keywords = plan_hints.get("poi_keywords") or self._select_poi_keywords(request)
             poi_results = []
             for keyword in poi_keywords:
                 self._debug("Thought: 需要用高德 POI 验证候选地点，并获取地址线索。", debug)
@@ -641,8 +672,8 @@ class TripPilotConversationAgent:
             observations["poi"] = "\n\n".join(poi_results)
 
         if "geocode" in tools:
-            self._progress("正在解析路线点位")
-            geo_keywords = self._select_poi_keywords(request)[:2]
+            self._progress("正在解析路线点位", stage="route")
+            geo_keywords = plan_hints.get("route_points") or self._select_poi_keywords(request)[:2]
             geo_results = []
             for keyword in geo_keywords:
                 self._debug("Thought: 路线和距离计算需要经纬度，先解析地点。", debug)
@@ -657,7 +688,7 @@ class TripPilotConversationAgent:
             observations["geocode"] = "\n\n".join(geo_results)
 
         if "distance" in tools:
-            self._progress("正在查询路线与交通")
+            self._progress("正在查询路线与交通", stage="route")
             observations["distance"] = (
                 "Planner 要求距离测量，但当前缺少可靠的起终点经纬度。"
                 "已在草案中标记路线距离需要进一步确认。"
@@ -667,7 +698,7 @@ class TripPilotConversationAgent:
 
         hotel_price = None
         if "hotel" in tools:
-            self._progress("正在核对住宿参考")
+            self._progress("正在核对住宿参考", stage="hotel")
             stay_nights = max(days - 1, 1)
             self._debug("Thought: 住宿价格波动大，查询酒店 MCP 参考价。", debug)
             self._debug(
@@ -684,7 +715,7 @@ class TripPilotConversationAgent:
             self._debug(f"Observation: {hotel_note}", debug)
 
         if "budget" in tools:
-            self._progress("正在估算预算")
+            self._progress("正在估算预算", stage="budget")
             budget_level = self._guess_budget_level(request)
             self._debug("Thought: 需要根据城市消费系数和酒店参考价估算当地预算。", debug)
             self._debug(
@@ -699,6 +730,8 @@ class TripPilotConversationAgent:
                     "city": destination,
                     "budget_level": budget_level,
                     "hotel_price_per_night": hotel_price,
+                    "user_budget": request.budget,
+                    "budget_scope": request.budget_scope,
                 },
                 lambda: estimate_trip_budget.invoke(
                     {
@@ -707,13 +740,15 @@ class TripPilotConversationAgent:
                         "city": destination,
                         "budget_level": budget_level,
                         "hotel_price_per_night": hotel_price,
+                        "user_budget": request.budget,
+                        "budget_scope": request.budget_scope,
                     }
                 ),
             )
             self._debug(f"Observation: {observations['budget']}", debug)
 
         if "calculate" in tools and request.budget and request.people:
-            self._progress("正在计算预算拆分")
+            self._progress("正在计算预算拆分", stage="calculate")
             expression = f"{request.budget} / {request.people}"
             self._debug("Thought: 用户预算需要拆分，调用计算工具。", debug)
             self._debug(f'Action: calculate(expression="{expression}")', debug)
@@ -733,6 +768,29 @@ class TripPilotConversationAgent:
             for key, value in observations.items()
         }
         return observations
+
+    def _collect_plan_hints(self, plan: List[Dict]) -> Dict[str, List[str] | str]:
+        hints: Dict[str, List[str] | str] = {
+            "poi_keywords": [],
+            "route_points": [],
+            "budget_focus": "",
+        }
+        for item in plan:
+            params = item.get("params") if isinstance(item, dict) else None
+            if not isinstance(params, dict):
+                continue
+            for key in ["poi_keywords", "route_points"]:
+                value = params.get(key)
+                if isinstance(value, str) and value.strip():
+                    hints[key].append(value.strip())
+                elif isinstance(value, list):
+                    hints[key].extend(str(v).strip() for v in value if str(v).strip())
+            if params.get("budget_focus"):
+                hints["budget_focus"] = str(params.get("budget_focus"))
+
+        hints["poi_keywords"] = list(dict.fromkeys(hints["poi_keywords"]))[:4]
+        hints["route_points"] = list(dict.fromkeys(hints["route_points"]))[:4]
+        return hints
 
     def _cached_tool_invoke(self, tool_name: str, args: Dict, fn: Callable[[], str]) -> str:
         cache_key = json.dumps({"tool": tool_name, "args": args}, ensure_ascii=False, sort_keys=True)
@@ -1065,6 +1123,7 @@ def _normalize_plan(raw_plan) -> List[Dict]:
                     "name": item.get("name") or f"步骤{index}",
                     "tool": tool,
                     "reason": item.get("reason") or "Planner 未给出明确理由",
+                    "params": item.get("params") if isinstance(item.get("params"), dict) else {},
                 }
             )
             continue

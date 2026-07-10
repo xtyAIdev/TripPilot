@@ -4,7 +4,7 @@ from typing import Dict, List
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.messages import AIMessage, HumanMessage
 
-from trip_pilot.schemas import OpenQuestion, TripRequest, TripState, UserProfile
+from trip_pilot.schemas import AgentStepEvent, OpenQuestion, TripRequest, TripState, UserProfile
 
 
 @dataclass
@@ -19,6 +19,7 @@ class TripPilotMemory:
     open_questions: List[OpenQuestion] = field(default_factory=list)
     tool_cache: Dict[str, str] = field(default_factory=dict)
     last_tool_summary: Dict[str, str] = field(default_factory=dict)
+    step_events: List[AgentStepEvent] = field(default_factory=list)
     debug_events: List[str] = field(default_factory=list)
     phase: str = "idle"
     reply_mode: str = "standard"
@@ -34,6 +35,21 @@ class TripPilotMemory:
         self.debug_events.append(content)
         if len(self.debug_events) > 120:
             self.debug_events = self.debug_events[-120:]
+
+    def remember_step(
+        self,
+        stage: str,
+        title: str,
+        detail: str = "",
+        status: str = "running",
+    ) -> None:
+        if self.step_events and self.step_events[-1].status == "running":
+            self.step_events[-1].status = "done"
+        self.step_events.append(
+            AgentStepEvent(stage=stage, title=title, detail=detail, status=status)
+        )
+        if len(self.step_events) > 80:
+            self.step_events = self.step_events[-80:]
 
     def history_summary(self, limit: int = 6) -> str:
         messages = self.chat_history.messages[-limit:]
@@ -66,6 +82,7 @@ class TripPilotMemory:
         self.open_questions = []
         self.tool_cache = {}
         self.last_tool_summary = {}
+        self.step_events = []
         self.debug_events = []
         self.phase = "idle"
         self.reply_mode = "standard"

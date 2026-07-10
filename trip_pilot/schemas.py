@@ -79,6 +79,15 @@ class TripState(BaseModel):
     plan_mode: str = Field(default="official", description="draft/official")
 
 
+class AgentStepEvent(BaseModel):
+    """一次 Agent 执行过程中的阶段事件，用于 UI 展示和调试。"""
+
+    stage: str = Field(description="阶段名称，例如 parse/retrieve/tool/reflect")
+    title: str = Field(description="给用户看的阶段标题")
+    detail: str = Field(default="", description="简短说明")
+    status: str = Field(default="running", description="running/done/error")
+
+
 class ConversationStateSnapshot(TripState):
     """兼容旧名称，实际等同于 TripState。"""
 

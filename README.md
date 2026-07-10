@@ -28,10 +28,10 @@ Agent-TripPilot 是一个基于 LangChain、RAG、本地 BGE 向量模型和 MCP
 - 参数确认：正式生成前确认日期、人数、天数、交通方式、预算范围等必要信息
 - 高德 MCP：天气、POI 工具接入
 - 酒店 MCP：酒店搜索和价格查询接入，支持 ModelScope 代理或 RollingGo 官方接口
-- 预算估算：城市消费系数 + 酒店 MCP 中位参考价
+- 预算估算：城市消费系数 + 酒店 MCP 中位参考价，并结合用户预算、预算口径、人均/日均消费和缺口做可行性判断
 - 运行时上下文：注入当前时间，支持相对日期理解
 - 计算工具：支持安全基础数学计算
-- Plan-and-Solve：Planner 输出工具计划，Executor 按计划选择工具
+- Plan-and-Solve：Planner 输出工具计划和可选参数，Executor 按计划选择工具与 POI/路线关键词
 - Planner 输出容错：字符串步骤会自动规范化，避免模型格式波动导致崩溃
 - ReAct 调试轨迹：显示 Thought、Action、Observation
 - Reflection 迭代：最多 2 轮质检和自动优化
@@ -39,9 +39,9 @@ Agent-TripPilot 是一个基于 LangChain、RAG、本地 BGE 向量模型和 MCP
 - 生成后追问：酒店、住宿、预算、路线等补充问题默认走 follow-up，不重新生成完整行程
 - 模型分工：DeepSeek 负责主规划和反思；豆包 mini 负责轻量理解、抽取和后续多模态；Seedream 负责可选封面图
 - 导出可选：只有用户明确要求“导出/保存”才写入 `outputs/trip_plan.md`
-- Streamlit UI：聊天、参数表单、调试轨迹、Markdown 下载和封面图生成
+- Streamlit UI：聊天、参数表单、动态工作流、调试轨迹、Markdown 下载和封面图生成
 - 本轮评分：UI 展示需求理解、约束满足、工具使用、输出质量等 8 维评分
-- 产品化交互：左侧参数表单和快捷调整，中间对话，右侧 tabs 展示结果、状态、过程、评分和封面
+- 产品化交互：左侧参数表单和快捷调整，中间对话与待确认项，右侧 tabs 展示结果、工作流、状态、调试、评分和封面
 
 ## 快速开始
 

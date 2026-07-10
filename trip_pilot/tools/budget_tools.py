@@ -39,6 +39,8 @@ def estimate_trip_budget(
     city: str,
     budget_level: str = "中等",
     hotel_price_per_night: float | None = None,
+    user_budget: float | None = None,
+    budget_scope: str | None = None,
 ) -> str:
     """估算旅行基础预算，可传入酒店 MCP 查询到的每晚住宿价格。"""
     try:
@@ -61,12 +63,26 @@ def estimate_trip_budget(
         transport_total = local_transport * days * people
         ticket_total = tickets * days * people
         total = hotel_total + food_total + transport_total + ticket_total
+        per_person_total = round(total / people)
+        per_person_day = round(total / people / days)
 
         hotel_note = (
             "住宿价格来自外部酒店查询结果"
             if hotel_price_per_night
             else "住宿价格来自城市消费系数粗估，建议接入酒店 MCP 后替换"
         )
+        scope_note = budget_scope or "未确认是否包含往返大交通"
+
+        feasibility = "未提供用户预算，暂不判断是否超支。"
+        if user_budget is not None:
+            user_budget = float(user_budget)
+            gap = round(user_budget - total)
+            if gap >= 0:
+                feasibility = f"用户预算约 {user_budget:.0f} 元，按当前估算还剩约 {gap} 元机动空间。"
+            else:
+                feasibility = f"用户预算约 {user_budget:.0f} 元，按当前估算缺口约 {abs(gap)} 元，需要压缩住宿、餐饮或活动。"
+            if "含往返" in scope_note:
+                feasibility += " 由于预算包含往返大交通，实际当地可用预算会更紧。"
 
         return (
             f"{city}{days}天{people}人{budget_level}预算估算：\n"
@@ -76,7 +92,10 @@ def estimate_trip_budget(
             f"- 市内交通：约 {transport_total} 元（按每人每天 {local_transport} 元）\n"
             f"- 门票/活动：约 {ticket_total} 元（按每人每天 {tickets} 元）\n"
             f"- 合计：约 {total} 元\n"
-            "说明：这是粗略估算，不含往返大交通。酒店、门票和餐饮价格应优先用实时工具确认。"
+            f"- 人均合计：约 {per_person_total} 元，人均每天：约 {per_person_day} 元\n"
+            f"- 预算口径：{scope_note}\n"
+            f"- 可行性判断：{feasibility}\n"
+            "说明：这是当地基础消费粗估，酒店、门票、餐饮和往返大交通应优先以实时工具或平台价格为准。"
         )
     except Exception as e:
         return f"预算估算失败：{e}"
