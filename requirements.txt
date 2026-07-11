@@ -10,3 +10,4 @@ langchain-openai
 openai
 httpx
 streamlit
+pypdf
